@@ -1,90 +1,52 @@
-pipeline {
-  agent any
-	
-  environment {
-    DOCKERHUB_CREDENTIALS = credentials('docker-hub-cred')
-    REMOTE_SERVER = '52.73.28.146'
-    REMOTE_USER = 'ec2-user' 	  	  
-  }
-	
-  // Fetch code from GitHub
-	
-  stages {
-    stage('checkout') {
-      steps {
-        git branch: 'main', url: 'https://github.com/palakbhawsar98/JavaWebApp'
+node {
+    // reference to maven
+    // ** NOTE: This 'maven-3.6.1' Maven tool must be configured in the Jenkins Global Configuration.   
+    def mvnHome = tool 'maven-3.8.5'
 
-      }
+    // holds reference to docker image
+    def dockerImage
+    // ip address of the docker private repository(nexus)
+    
+    def dockerRepoUrl = "localhost:8083"
+    def dockerImageName = "hello-world-java"
+    def dockerImageTag = "${dockerRepoUrl}/${dockerImageName}:${env.BUILD_NUMBER}"
+    
+    stage('Clone Repo') { // for display purposes
+      // Get some code from a GitHub repository
+      git 'https://github.com/johnclinton14497/docker-hello-world-spring-boot'
+      // Get the Maven tool.
+      // ** NOTE: This 'maven-3.6.1' Maven tool must be configured
+      // **       in the global configuration.           
+      mvnHome = tool 'maven-3.8.5'
+    }    
+  
+    stage('Build Project') {
+      // build project via maven
+      sh "'${mvnHome}/bin/mvn' -Dmaven.test.failure.ignore clean package"
     }
-	  
-   // Build Java application
-	  
-    stage('Maven Build') {
-      steps {
-        sh 'mvn clean install'
-      }
-	    
-     // Post building archive Java application
-	    
-      post {
-        success {
-          archiveArtifacts artifacts: '**/target/*.jar'
-        }
-      }
+	
+	stage('Publish Tests Results'){
+      parallel(
+        publishJunitTestsResultsToJenkins: {
+          echo "Publish junit Tests Results"
+		  junit '**/target/surefire-reports/TEST-*.xml'
+		  archive 'target/*.jar'
+        },
+        publishJunitTestsResultsToSonar: {
+          echo "This is branch b"
+      })
     }
-	  
-  // Test Java application
-	  
-    stage('Maven Test') {
-      steps {
-        sh 'mvn test'
-      }
-    }
-	  
-   // Build docker image in Jenkins
-	  
+		
     stage('Build Docker Image') {
-
-      steps {
-        sh 'docker build -t javawebapp:latest .'
-        sh 'docker tag javawebapp palakbhawsar/javawebapp:latest'
-      }
+      // build docker image
+      sh "whoami"
+      //sh "ls -all /var/run/docker.sock"
+      sh "mv ./target/hello*.jar ./data" 
+      
+      dockerImage = docker.build("hello-world-java")
     }
-	  
-   // Login to DockerHub before pushing docker Image
-	  
-    stage('Login to DockerHub') {
-      steps {
-        sh 'echo $DOCKERHUB_CREDENTIALS_PSW | docker login -u    $DOCKERHUB_CREDENTIALS_USR --password-stdin'
-      }
+   
+    stage('Deploy Docker Image'){
+      
     }
-	  
-   // Push image to DockerHub registry
-	  
-    stage('Push Image to dockerHUb') {
-      steps {
-        sh 'docker push palakbhawsar/javawebapp:latest'
-      }
-      post {
-        always {
-          sh 'docker logout'
-        }
-      }
-
-    }
-	  
-   // Pull docker image from DockerHub and run in EC2 instance 
-	  
-    stage('Deploy Docker image to AWS instance') {
-      steps {
-        script {
-          sshagent(credentials: ['awscred']) {
-          sh "ssh -o StrictHostKeyChecking=no ${REMOTE_USER}@${REMOTE_SERVER} 'docker stop javaApp || true && docker rm javaApp || true'"
-	  sh "ssh -o StrictHostKeyChecking=no ${REMOTE_USER}@${REMOTE_SERVER} 'docker pull palakbhawsar/javawebapp'"
-          sh "ssh -o StrictHostKeyChecking=no ${REMOTE_USER}@${REMOTE_SERVER} 'docker run --name javaApp -d -p 8081:8081 palakbhawsar/javawebapp'"
-          }
-        }
-      }
-    }
-  }
 }
